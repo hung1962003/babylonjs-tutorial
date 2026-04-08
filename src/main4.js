@@ -122,3 +122,4 @@ addSlider("Alpha: ", 0, 1, pbr.alpha, (value) => {
   standard.alpha = value;
   pbr.alpha = value;
 })
+Inspector.Show(scene, {});
