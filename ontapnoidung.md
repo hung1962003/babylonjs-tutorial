@@ -256,3 +256,67 @@ isAdditive:cộng dồn animation (vd : đi bộ + vẫy tay)
 
 player.moveWithCollisions(player.forward.scaleInPlace(speed));
 //"Đi theo hướng mình đang nhìn, với tốc độ X, và không xuyên vật thể"
+
+Vì sao lấy animation từ scene mà không phải player?
+
+player = mesh (hình nhân vật)
+animation = hành động (đi, đứng, nhảy...)
+scene = nơi quản lý tất cả (mesh + animation + camera + light)
+
+.hdr là gì?
+.hdr = High Dynamic Range image
+Chứa dữ liệu ánh sáng rất chi tiết (cường độ cao/thấp)
+Là ảnh gốc của môi trường
+
+. .dds (prefiltered) là gì?
+.dds (ở đây) = environment map đã được xử lý sẵn
+Đã được:
+blur nhiều mức
+tối ưu cho GPU
+chứa sẵn dữ liệu reflection theo roughness
+
+| Tiêu chí               | `.hdr`          | `.dds (prefiltered)` |
+| ---------------------- | --------------- | -------------------- |
+| Bản chất               | Ảnh gốc         | Dữ liệu đã xử lý     |
+| Dùng trực tiếp cho PBR | ❌ Không tối ưu  | ✅ Rất tốt            |
+| Hiệu năng              | ❌ Chậm hơn      | ✅ Nhanh              |
+| Reflection chuẩn       | ⚠️ Phải convert | ✅ Chuẩn sẵn          |
+| Dễ dùng                | ✅ Đơn giản      | ⚠️ Cần chuẩn bị file |
+
+🚀 Khi nào dùng cái nào?
+Dùng .hdr khi:
+bạn đang test nhanh
+hoặc sẽ convert sau
+Dùng .dds / .env khi:
+build production
+cần hiệu năng + chất lượng cao
+
+Nếu muốn đẹp + mượt → luôn dùng .dds hoặc .env
+
+chuyển từ hdr sang => env hoặc dds 
+
+createDefaultSkybox(texture bạn đã set trước:,(tham số thứ 2),size)
+(tham số thứ 2) 
+false → dùng material thường (StandardMaterial)
+true → dùng PBRMaterial
+
+environmentTexture → ánh sáng + reflection
+skybox → chỉ là hình ảnh nền
+
+GlowLayer :lấy phần sáng (emissive) của vật thể
+blur ra → tạo hiệu ứng phát sáng
+
+referenceMeshToUseItsOwnMaterial:GlowLayer sẽ dùng material của mesh đó
+thay vì dùng material mặc định của glow
+giữ đúng màu emissive
+không bị override
+
+
+earcut:tool chia polygon → triangle
+
+SSRRenderingPipeline:Tạo phản xạ real-time trên màn hình
+(khác với environment reflection)
+lấy hình ảnh đã render trên màn hình
+tính toán phản xạ dựa trên đó
+
+ssr.step = 5;
