@@ -320,3 +320,32 @@ lấy hình ảnh đã render trên màn hình
 tính toán phản xạ dựa trên đó
 
 ssr.step = 5;
+
+particles ParticleSystem (CPU-based)
+particleSystem.createSphereEmitter(2); phát ra từ hình cầu (hiệu ứng bụi / aura / glow)
+
+fountain (ParticleSystem dạng vật lý)
+fountain.gravity = new Vector3(0, -9.81, 0);(Có gravity (trọng lực))
+fountain.createConeEmitter(1, Math.PI / 3);(vòi nước / pháo hoa)
+
+starfield (Số lượng rất lớn: 10000) (background space, galaxy)
+starfield.minEmitPower = 0;
+starfield.maxEmitPower = 0; Không di chuyển:
+
+rotatingParticles
+rotatingParticles.minAngularSpeed = 5;
+rotatingParticles.maxAngularSpeed = 20;Có rotation (xoay) 
+
+GPUParticleSystem
+| Đặc điểm  | ParticleSystem | GPUParticleSystem |
+| --------- | -------------- | ----------------- |
+| Xử lý     | CPU            | GPU               |
+| Số lượng  | ~ vài nghìn    | hàng trăm nghìn   |
+| Hiệu năng | thấp hơn       | rất cao           |
+| Tùy biến  | linh hoạt      | hạn chế hơn       |
+
+ ParticleSystem.BLENDMODE_MULTIPLYADD;đang quyết định cách các particle “pha trộn” (blend) với nền và với nhau. cân bằng: (sáng + tối,depth tốt hơn)
+
+ BLENDMODE_STANDARD :dùng cho: khói ,nước (giống bình thường (alpha blend))
+ BLENDMODE_ADD; dùng cho: lửa 🔥 ,laser , magic glow ;nhược: dễ bị cháy trắng (rất sáng)
+ BLENDMODE_MULTIPLY;dùng cho: shadow ,dirt (làm tối)

@@ -1,29 +1,31 @@
+import "@babylonjs/core/Physics/physicsEngineComponent.js";
+import HavokPhysics from "@babylonjs/havok";
 import {
   ArcRotateCamera,
   Engine,
+  HavokPlugin,
   HemisphericLight,
+  Mesh,
   MeshBuilder,
+  PhysicsAggregate,
+  PhysicsBody,
+  PhysicsMotionType,
+  PhysicsShapeConvexHull,
+  PhysicsShapeMesh,
+  PhysicsShapeSphere,
+  PhysicsShapeType,
+  PhysicsViewer,
   Scene,
   SceneLoader,
   Vector3,
 } from "@babylonjs/core";
 import "@babylonjs/loaders";
-import { MODEL_LIST } from "./scripts/modelDefs";
-import { loadModelsToScene } from "./scripts/loadModels";
-import { createModelListGui } from "./scripts/modelListGui";
-import { createReconstructionPlacementController } from "./scripts/placementController";
 import "./style.css";
+import { Inspector, ShowInspector } from "@babylonjs/inspector";
+
 const canvas = document.getElementById("renderCanvas");
 const engine = new Engine(canvas, true);
 const scene = new Scene(engine);
-
-engine.runRenderLoop(() => {
-  scene.render();
-});
-
-window.addEventListener("resize", () => {
-  engine.resize();
-});
 
 new HemisphericLight("light", new Vector3(0, 1, 0), scene);
 const camera = new ArcRotateCamera(
@@ -38,82 +40,126 @@ camera.attachControl(canvas, true);
 camera.speed = 10;
 camera.wheelPrecision = 10;
 camera.lowerRadiusLimit = 5;
+camera.upperBetaLimit = Math.PI / 2.05;
+camera.beta = 1.35;
+camera.radius = 18;
+camera.target = new Vector3(0, 0, 0);
+engine.runRenderLoop(() => {
+  scene.render();
+});
 
-// const ground = MeshBuilder.CreateGround(
-//   "ground",
-//   {
-//     width: 100,
-//     height: 100,
-//   },
-//   scene,
-// );
-// ground.isPickable = true;
-SceneLoader.ImportMesh(
-  "",
-  "public/assets/",
-  "F2.glb",
-  scene,
-  (meshes) => {
-    meshes.forEach((mesh) => {
-      mesh.showBoundingBox = true;
-    });
-  },
-);
-// const models = await loadModelsToScene({ scene, modelList: MODEL_LIST });
+window.addEventListener("resize", () => {
+  engine.resize();
+});
 
-// /** @type {Map<string, import("@babylonjs/core").TransformNode>} */
-// const prototypeByName = new Map();
-// /** @type {Map<string, Vector3>} */
-// const modelSizeByName = new Map();
-// const modelScaleByName = new Map();
-// const modelYOffsetByName = new Map();
-// const modelRoleByName = new Map();
+async function initPhysics() {
+  const havok = await HavokPhysics({
+    locateFile: (file) =>
+      file === "HavokPhysics.wasm" ? "/HavokPhysics.wasm" : file,
+  });
 
-// for (const def of MODEL_LIST) {
-//   modelScaleByName.set(def.name, def.placementScale ?? 1);
-//   modelYOffsetByName.set(def.name, def.placementYOffset ?? 0);
-//   modelRoleByName.set(def.name, def.role ?? "");
-// }
+  scene.enablePhysics(new Vector3(0, -9.81, 0), new HavokPlugin(true, havok));
 
-// for (const root of models) {
-//   prototypeByName.set(root.name, root);
+  const viewer = new PhysicsViewer(scene);
+  const showPhysicsDebug = false;
 
-//   root.computeWorldMatrix(true);
-//   const { min, max } = root.getHierarchyBoundingVectors(true);
-//   const size = max.subtract(min);
-//   modelSizeByName.set(
-//     root.name,
-//     new Vector3(
-//       Math.max(size.x, 0.2),
-//       Math.max(size.y, 0.2),
-//       Math.max(size.z, 0.2),
-//     ),
-//   );
-// }
+  const { meshes } = await SceneLoader.ImportMeshAsync(
+    "",
+    "/assets/",
+    "F2.glb",
+    scene,
+  );
 
-// const placement = createReconstructionPlacementController({
-//   scene,
-//   canvas,
-//   floorMesh: ground,
-//   getPrototype: (name) => prototypeByName.get(name) ?? null,
-//   modelSizeByName,
-//   modelScaleByName,
-//   modelYOffsetByName,
-//   modelRoleByName,
-//   onPlaced: (placed, modelName) => {
-//     placed.name = `placed_${modelName}_${placed.uniqueId}`;
-//   },
-// });
+  const { meshes: meshes1 } = await SceneLoader.ImportMeshAsync(
+    "",
+    "/assets/",
+    "12.glb",
+    scene,
+  );
+  const mesh = meshes[0];
+  const mesh1 = meshes1[0];
+  if (!mesh || !mesh1) {
+    throw new Error("F2.glb or b2.glb: no meshes in file");
+  }
+  const realMeshes = meshes.filter((m) => m.getTotalVertices() > 0);
+  const merged = Mesh.MergeMeshes(
+    realMeshes,
+    true, // dispose source
+    true, // allow32bitsIndices
+    undefined,
+    false,
+    true,
+  );
+  if (!merged) {
+    throw new Error("F2.glb: unable to merge renderable meshes");
+  }
+  merged.position.y = 5;
+  const realMeshes1 = meshes1.filter((m) => m.getTotalVertices() > 0);
+  const merged1 = Mesh.MergeMeshes(
+    realMeshes1,
+    true, // dispose source
+    true, // allow32bitsIndices
+    undefined,
+    false,
+    true,
+  );
+  if (!merged1) {
+    throw new Error("12.glb: unable to merge renderable meshes");
+  }
+  merged1.position.y = 10;
 
-// createModelListGui({
-//   scene,
-//   models,
-//   title: "Model Catalog",
-//   onSelect: (modelRoot) => {
-//     placement.startPlacing(modelRoot.name);
-//   },
-// });
+  // merged.computeWorldMatrix(true);
+  // merged.bakeCurrentTransformIntoVertices();
+  // merged1.computeWorldMatrix(true);
+  // merged1.bakeCurrentTransformIntoVertices();
 
-// window.addEventListener("beforeunload", () => {
-//   placement.dispose();
-// });
+  const body = new PhysicsBody(merged, PhysicsMotionType.DYNAMIC, false, scene);
+  body.setMassProperties({ mass: 1 });
+
+  const shape = new PhysicsShapeMesh(merged, scene);
+  body.shape = shape;
+  const body1 = new PhysicsBody(
+    merged1,
+    PhysicsMotionType.DYNAMIC,
+    false,
+    scene,
+  );
+  body1.setMassProperties({ mass: 1 });
+
+  const shape1 = new PhysicsShapeMesh(merged1, scene);
+  body1.shape = shape1;
+
+  if (showPhysicsDebug) {
+    viewer.showBody(body);
+    viewer.showBody(body1);
+  }
+
+  mesh.position.y = 5;
+
+  const initialShape = new PhysicsShapeSphere(new Vector3(0, 0, 0), 1.5, scene);
+
+  if (showPhysicsDebug) {
+    viewer.showBody(body);
+  }
+
+  // setTimeout(() => {
+  //   viewer.hideBody(body);
+  //   body.disablePreStep = false;
+  //   const newShape = new PhysicsShapeConvexHull(mesh, scene);
+  //   body.shape = newShape;
+  //   viewer.showBody(body);
+  //   mesh.position.y = 3;
+  // }, 2000);
+
+  const ground = MeshBuilder.CreateGround(
+    "ground",
+    { width: 6, height: 6 },
+    scene,
+  );
+  new PhysicsAggregate(ground, PhysicsShapeType.BOX, { mass: 0 });
+}
+
+initPhysics().catch((err) => {
+  console.error(err);
+});
+// Inspector.Show(scene, {});
