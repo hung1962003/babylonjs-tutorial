@@ -11,7 +11,7 @@ import "@babylonjs/core/Helpers/sceneHelpers";
 import "./style.css";
 
 const scaffoldRootUrl = "/assets/";
-const scaffoldFileName = "1.glb";
+const scaffoldFileName = "blockD2.glb";
 const forest = "/assets/forest.env";
 
 fetch(`${scaffoldRootUrl}${scaffoldFileName}`)

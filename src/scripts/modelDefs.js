@@ -16,11 +16,15 @@ import { Vector3 } from '@babylonjs/core';
 /** @type {GlbModelDef[]} */
 export const MODEL_LIST = [
   {
-    file: "scaffold.glb",
-    name: "scaffold",
+    file: "blockD2.glb",
+    name: "blockD2",
     position: new Vector3(0, 0, 0),
     role: "parent",
   },
-
-  
+  {
+    file: "12.glb",
+    name: "12",
+    position: new Vector3(0, 0, 0),
+    role: "child",
+  },
 ];

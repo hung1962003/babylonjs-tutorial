@@ -349,3 +349,24 @@ GPUParticleSystem
  BLENDMODE_STANDARD :dùng cho: khói ,nước (giống bình thường (alpha blend))
  BLENDMODE_ADD; dùng cho: lửa 🔥 ,laser , magic glow ;nhược: dễ bị cháy trắng (rất sáng)
  BLENDMODE_MULTIPLY;dùng cho: shadow ,dirt (làm tối)
+
+
+ PhotoDome("sphere", alps, {...}, scene);một hình cầu úp ngược
+ bạn đứng bên trong
+texture là ảnh 360
+| Thuộc tính       | Ý nghĩa           |
+| ---------------- | ----------------- |
+| resolution       | độ mịn mesh       |
+| size             | kích thước sphere |
+| useDirectMapping | mapping texture   |
+    AdvancedDynamicTexture => StackPanel (tạo UI overlay=>container xếp button theo chiều dọc)
+
+Animation beginDirectAnimation : chuyển cảnh 
+
+fadeOutAnimation.setKeys([
+  { frame: 0, value: 1 },
+  { frame: 120, value: 0 }
+]);
+từ frame 0 → 120:
+
+alpha: 1 → 0

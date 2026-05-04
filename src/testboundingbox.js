@@ -1,28 +1,27 @@
-import "@babylonjs/core/Physics/physicsEngineComponent.js";
-import HavokPhysics from "@babylonjs/havok";
 import {
   ArcRotateCamera,
   Engine,
-  HavokPlugin,
+  Color3,
   HemisphericLight,
-  Mesh,
   MeshBuilder,
-  PhysicsAggregate,
-  PhysicsBody,
-  PhysicsMotionType,
-  PhysicsShapeConvexHull,
-  PhysicsShapeMesh,
-  PhysicsShapeSphere,
-  PhysicsShapeType,
-  PhysicsViewer,
   Scene,
-  SceneLoader,
+  StandardMaterial,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
-import "@babylonjs/loaders";
 import "./style.css";
-import { Inspector, ShowInspector } from "@babylonjs/inspector";
+import { createModelListGui } from "./scripts/modelListGui";
+import { MODEL_LIST } from "./scripts/modelDefs";
+import {
+  buildPlacedModelInfo,
+  createReconstructionPlacementController,
+} from "./scripts/placementController";
+import { loadModelsToScene } from "./scripts/loadModels";
+import { Inspector } from "@babylonjs/inspector";
 
+/** @typedef {import("@babylonjs/core").AbstractMesh} AbstractMesh */
+
+const MODEL_DEF_BY_NAME = new Map(MODEL_LIST.map((def) => [def.name, def]));
 const canvas = document.getElementById("renderCanvas");
 const engine = new Engine(canvas, true);
 const scene = new Scene(engine);
@@ -39,11 +38,11 @@ const camera = new ArcRotateCamera(
 camera.attachControl(canvas, true);
 camera.speed = 10;
 camera.wheelPrecision = 10;
-camera.lowerRadiusLimit = 5;
-camera.upperBetaLimit = Math.PI / 2.05;
-camera.beta = 1.35;
-camera.radius = 18;
-camera.target = new Vector3(0, 0, 0);
+// camera.lowerRadiusLimit = 5;
+// camera.upperBetaLimit = Math.PI / 2.05;
+// camera.beta = 1.35;
+// camera.radius = 18;
+// camera.target = new Vector3(0, 0, 0);
 engine.runRenderLoop(() => {
   scene.render();
 });
@@ -52,114 +51,183 @@ window.addEventListener("resize", () => {
   engine.resize();
 });
 
-async function initPhysics() {
-  const havok = await HavokPhysics({
-    locateFile: (file) =>
-      file === "HavokPhysics.wasm" ? "/HavokPhysics.wasm" : file,
-  });
+Inspector.Show(scene, {});
 
-  scene.enablePhysics(new Vector3(0, -9.81, 0), new HavokPlugin(true, havok));
-
-  const viewer = new PhysicsViewer(scene);
-  const showPhysicsDebug = false;
-
-  const { meshes } = await SceneLoader.ImportMeshAsync(
-    "",
-    "/assets/",
-    "F2.glb",
-    scene,
-  );
-
-  const { meshes: meshes1 } = await SceneLoader.ImportMeshAsync(
-    "",
-    "/assets/",
-    "12.glb",
-    scene,
-  );
-  const mesh = meshes[0];
-  const mesh1 = meshes1[0];
-  if (!mesh || !mesh1) {
-    throw new Error("F2.glb or b2.glb: no meshes in file");
+/**
+ * @param {AbstractMesh} root
+ * @returns {AbstractMesh[]}
+ */
+function getRenderableMeshes(root) {
+  const meshes = root.getChildMeshes(false).filter((mesh) => mesh.getTotalVertices() > 0);
+  if (root.getTotalVertices() > 0 && !meshes.includes(root)) {
+    meshes.unshift(root);
   }
-  const realMeshes = meshes.filter((m) => m.getTotalVertices() > 0);
-  const merged = Mesh.MergeMeshes(
-    realMeshes,
-    true, // dispose source
-    true, // allow32bitsIndices
-    undefined,
-    false,
-    true,
-  );
-  if (!merged) {
-    throw new Error("F2.glb: unable to merge renderable meshes");
-  }
-  merged.position.y = 5;
-  const realMeshes1 = meshes1.filter((m) => m.getTotalVertices() > 0);
-  const merged1 = Mesh.MergeMeshes(
-    realMeshes1,
-    true, // dispose source
-    true, // allow32bitsIndices
-    undefined,
-    false,
-    true,
-  );
-  if (!merged1) {
-    throw new Error("12.glb: unable to merge renderable meshes");
-  }
-  merged1.position.y = 10;
-
-  // merged.computeWorldMatrix(true);
-  // merged.bakeCurrentTransformIntoVertices();
-  // merged1.computeWorldMatrix(true);
-  // merged1.bakeCurrentTransformIntoVertices();
-
-  const body = new PhysicsBody(merged, PhysicsMotionType.DYNAMIC, false, scene);
-  body.setMassProperties({ mass: 1 });
-
-  const shape = new PhysicsShapeMesh(merged, scene);
-  body.shape = shape;
-  const body1 = new PhysicsBody(
-    merged1,
-    PhysicsMotionType.DYNAMIC,
-    false,
-    scene,
-  );
-  body1.setMassProperties({ mass: 1 });
-
-  const shape1 = new PhysicsShapeMesh(merged1, scene);
-  body1.shape = shape1;
-
-  if (showPhysicsDebug) {
-    viewer.showBody(body);
-    viewer.showBody(body1);
-  }
-
-  mesh.position.y = 5;
-
-  const initialShape = new PhysicsShapeSphere(new Vector3(0, 0, 0), 1.5, scene);
-
-  if (showPhysicsDebug) {
-    viewer.showBody(body);
-  }
-
-  // setTimeout(() => {
-  //   viewer.hideBody(body);
-  //   body.disablePreStep = false;
-  //   const newShape = new PhysicsShapeConvexHull(mesh, scene);
-  //   body.shape = newShape;
-  //   viewer.showBody(body);
-  //   mesh.position.y = 3;
-  // }, 2000);
-
-  const ground = MeshBuilder.CreateGround(
-    "ground",
-    { width: 6, height: 6 },
-    scene,
-  );
-  new PhysicsAggregate(ground, PhysicsShapeType.BOX, { mass: 0 });
+  return meshes;
 }
 
-initPhysics().catch((err) => {
+/**
+ * @param {AbstractMesh} root
+ * @returns {Vector3}
+ */
+function getHierarchyAabbSize(root) {
+  root.computeWorldMatrix(true);
+  const { min, max } = root.getHierarchyBoundingVectors(true);
+  return max.subtract(min);
+}
+
+/**
+ * Build a tighter size from actual mesh vertices instead of the coarse
+ * hierarchy AABB.
+ *
+ * @param {AbstractMesh} root
+ * @returns {Vector3}
+ */
+function getGeometrySize(root) {
+  const renderableMeshes = getRenderableMeshes(root);
+  if (renderableMeshes.length === 0) {
+    return getHierarchyAabbSize(root);
+  }
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+
+  for (const mesh of renderableMeshes) {
+    mesh.computeWorldMatrix(true);
+    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+    if (!positions || positions.length === 0) {
+      const { minimumWorld, maximumWorld } = mesh.getBoundingInfo().boundingBox;
+      minX = Math.min(minX, minimumWorld.x);
+      minY = Math.min(minY, minimumWorld.y);
+      minZ = Math.min(minZ, minimumWorld.z);
+      maxX = Math.max(maxX, maximumWorld.x);
+      maxY = Math.max(maxY, maximumWorld.y);
+      maxZ = Math.max(maxZ, maximumWorld.z);
+      continue;
+    }
+
+    const worldMatrix = mesh.getWorldMatrix();
+    for (let index = 0; index < positions.length; index += 3) {
+      const worldPoint = Vector3.TransformCoordinates(
+        new Vector3(
+          positions[index],
+          positions[index + 1],
+          positions[index + 2],
+        ),
+        worldMatrix,
+      );
+      minX = Math.min(minX, worldPoint.x);
+      minY = Math.min(minY, worldPoint.y);
+      minZ = Math.min(minZ, worldPoint.z);
+      maxX = Math.max(maxX, worldPoint.x);
+      maxY = Math.max(maxY, worldPoint.y);
+      maxZ = Math.max(maxZ, worldPoint.z);
+    }
+  }
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(minZ) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY) ||
+    !Number.isFinite(maxZ)
+  ) {
+    return getHierarchyAabbSize(root);
+  }
+
+  return new Vector3(maxX - minX, maxY - minY, maxZ - minZ);
+}
+
+/**
+ * @param {AbstractMesh} root
+ * @returns {Vector3}
+ */
+function getPlacementSize(root) {
+  return getGeometrySize(root);
+}
+
+function createGround() {
+  const ground = MeshBuilder.CreateGround(
+    "ground",
+    { width: 50, height: 50 },
+    scene,
+  );
+  ground.isPickable = true;
+
+  const groundMat = new StandardMaterial("groundMaterial", scene);
+  groundMat.diffuseColor = new Color3(0.18, 0.2, 0.24);
+  groundMat.specularColor = Color3.Black();
+  ground.material = groundMat;
+
+  return ground;
+}
+
+async function initPlacementScene() {
+  const ground = createGround();
+  /** @type {Map<string, AbstractMesh>} */
+  const protoByName = new Map();
+  const modelSizeByName = new Map();
+  const modelScaleByName = new Map();
+  const modelYOffsetByName = new Map();
+  const modelRoleByName = new Map();
+
+  const prototypes = await loadModelsToScene({
+    scene,
+    modelList: MODEL_LIST,
+    assetsBaseUrl: "/assets/",
+    onModelLoaded: (_index, _total, root) => {
+      const def = MODEL_DEF_BY_NAME.get(root.name);
+      if (!def) return;
+
+      root.setEnabled(false);
+      root.isPickable = false;
+      root.metadata = {
+        ...(root.metadata ?? {}),
+        modelName: def.name,
+        role: def.role,
+        isPrototype: true,
+      };
+
+      protoByName.set(def.name, root);
+      modelSizeByName.set(def.name, getPlacementSize(root));
+      modelScaleByName.set(def.name, def.placementScale ?? 1);
+      modelYOffsetByName.set(def.name, def.placementYOffset ?? 0);
+      modelRoleByName.set(def.name, def.role ?? "");
+    },
+  });
+
+  if (prototypes.length === 0) {
+    throw new Error("No placement prototypes were loaded from /assets/.");
+  }
+
+  const placement = createReconstructionPlacementController({
+    scene,
+    canvas,
+    floorMesh: ground,
+    getPrototype: (name) => protoByName.get(name) ?? null,
+    modelSizeByName,
+    modelScaleByName,
+    modelYOffsetByName,
+    modelRoleByName,
+    onPlaced: (placed, modelName) => {
+      console.log("[Placement]", modelName, buildPlacedModelInfo(placed));
+    },
+  });
+
+  createModelListGui({
+    scene,
+    models: prototypes,
+    title: "Placement Models",
+    onSelect: (modelRoot) => {
+      placement.startPlacing(modelRoot.name);
+    },
+  });
+}
+
+initPlacementScene().catch((err) => {
   console.error(err);
 });
-// Inspector.Show(scene, {});

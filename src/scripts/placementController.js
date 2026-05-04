@@ -5,6 +5,7 @@ import {
   PointerEventTypes,
   StandardMaterial,
   Vector3,
+  VertexBuffer,
 } from "@babylonjs/core";
 
 /** When true, `reconstructionScene` skips LMB orbit drag so LMB can place models. */
@@ -88,29 +89,96 @@ function getFloorSurfaceWorldY(floor) {
 
 /**
  * @param {TransformNode} root
- * @returns {number|null}
+ * @returns {AbstractMesh[]}
  */
-function getRenderableMinimumWorldY(root) {
-  const meshes = root
-    .getChildMeshes(false)
-    .filter((m) => m.isEnabled() && m.getTotalVertices() > 0);
-  if (
-    meshes.length === 0 &&
-    root instanceof AbstractMesh &&
-    root.isEnabled() &&
-    root.getTotalVertices() > 0
-  ) {
-    meshes.push(root);
-  }
-  if (meshes.length === 0) return null;
+function getRenderableMeshes(root) {
+  const meshes =
+    typeof root.getChildMeshes === "function"
+      ? root.getChildMeshes(false).filter((m) => m.getTotalVertices() > 0)
+      : [];
 
-  let minY = Number.POSITIVE_INFINITY;
-  for (const m of meshes) {
-    m.computeWorldMatrix(true);
-    const y = m.getBoundingInfo().boundingBox.minimumWorld.y;
-    if (y < minY) minY = y;
+  if (root instanceof AbstractMesh && root.getTotalVertices() > 0) {
+    meshes.unshift(root);
   }
-  return Number.isFinite(minY) ? minY : null;
+  return meshes;
+}
+
+/**
+ * Bounds from actual vertex positions. Hierarchy AABBs can include transform
+ * nodes or stale child boxes that make placement float above hollow parents.
+ *
+ * @param {TransformNode} root
+ * @returns {{min: Vector3, max: Vector3, center: Vector3, size: Vector3}}
+ */
+function getGeometryWorldBounds(root) {
+  root.computeWorldMatrix(true);
+  const renderableMeshes = getRenderableMeshes(root);
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+
+  const worldPoint = new Vector3();
+  for (const mesh of renderableMeshes) {
+    mesh.computeWorldMatrix(true);
+    const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
+    if (!positions || positions.length === 0) {
+      const { minimumWorld, maximumWorld } = mesh.getBoundingInfo().boundingBox;
+      minX = Math.min(minX, minimumWorld.x);
+      minY = Math.min(minY, minimumWorld.y);
+      minZ = Math.min(minZ, minimumWorld.z);
+      maxX = Math.max(maxX, maximumWorld.x);
+      maxY = Math.max(maxY, maximumWorld.y);
+      maxZ = Math.max(maxZ, maximumWorld.z);
+      continue;
+    }
+
+    const worldMatrix = mesh.getWorldMatrix();
+    for (let index = 0; index < positions.length; index += 3) {
+      Vector3.TransformCoordinatesFromFloatsToRef(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+        worldMatrix,
+        worldPoint,
+      );
+      minX = Math.min(minX, worldPoint.x);
+      minY = Math.min(minY, worldPoint.y);
+      minZ = Math.min(minZ, worldPoint.z);
+      maxX = Math.max(maxX, worldPoint.x);
+      maxY = Math.max(maxY, worldPoint.y);
+      maxZ = Math.max(maxZ, worldPoint.z);
+    }
+  }
+
+  if (
+    !Number.isFinite(minX) ||
+    !Number.isFinite(minY) ||
+    !Number.isFinite(minZ) ||
+    !Number.isFinite(maxX) ||
+    !Number.isFinite(maxY) ||
+    !Number.isFinite(maxZ)
+  ) {
+    const { min, max } = root.getHierarchyBoundingVectors(true);
+    return {
+      min,
+      max,
+      center: min.add(max).scale(0.5),
+      size: max.subtract(min),
+    };
+  }
+
+  const min = new Vector3(minX, minY, minZ);
+  const max = new Vector3(maxX, maxY, maxZ);
+  return {
+    min,
+    max,
+    center: min.add(max).scale(0.5),
+    size: max.subtract(min),
+  };
 }
 
 /**
@@ -134,6 +202,8 @@ export function createReconstructionPlacementController({
   let rotationSteps = 0;
   /** @type {{x:number, z:number} | null} */
   let lastSnapped = null;
+  /** @type {{position: Vector3, bottomY: number, rotationSteps: number} | null} */
+  let lastPreviewPlacement = null;
   /** @type {TransformNode | null} */
   let containerTarget = null;
   let canPlace = true;
@@ -159,8 +229,7 @@ export function createReconstructionPlacementController({
     for (const root of placedRoots) {
       if (root.metadata?.role !== "parent") continue;
 
-      root.computeWorldMatrix(true);
-      const { min, max } = root.getHierarchyBoundingVectors(true);
+      const { min, max } = getGeometryWorldBounds(root);
       if (
         worldX > min.x + CONTAINER_XZ_MARGIN &&
         worldX < max.x - CONTAINER_XZ_MARGIN &&
@@ -221,8 +290,7 @@ export function createReconstructionPlacementController({
     for (const root of placedRoots) {
       if (root.metadata?.role !== "child") continue;
 
-      root.computeWorldMatrix(true);
-      const { min, max } = root.getHierarchyBoundingVectors(true);
+      const { min, max } = getGeometryWorldBounds(root);
 
       if (
         aabbsOverlapXZ(pMinX, pMaxX, pMinZ, pMaxZ, min.x, max.x, min.z, max.z)
@@ -238,8 +306,8 @@ export function createReconstructionPlacementController({
   /** @type {StandardMaterial | null} */
   let boxMat = null;
 
-  const pickFloorOnly = (mesh) =>
-    !!mesh && mesh === floorMesh;
+  const pickPlacementSurface = (mesh) =>
+    !!mesh && (mesh === floorMesh || !!mesh.metadata?.isPlaced);
 
   const ensurePreviewBox = () => {
     if (box) return;
@@ -272,30 +340,41 @@ export function createReconstructionPlacementController({
   const refreshPreviewFromPointer = () => {
     if (!isPlacing || !placingName || !box) return;
 
-    const pick = scene.pick(scene.pointerX, scene.pointerY, pickFloorOnly);
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      pickPlacementSurface,
+    );
 
     if (!pick?.hit || !pick.pickedPoint) {
       box.setEnabled(false);
       lastSnapped = null;
+      lastPreviewPlacement = null;
       containerTarget = null;
       canPlace = false;
       return;
     }
 
     const size = modelSizeByName.get(placingName);
-    const halfY = size ? size.y / 2 : 0.5;
+    const previewSize = size ?? new Vector3(1, 1, 1);
+    const placementYOffset = modelYOffsetByName.get(placingName) ?? 0;
+    const halfY = previewSize.y / 2;
     const floorTop = getFloorSurfaceWorldY(floorMesh);
+    const surfaceY =
+      pick.pickedMesh === floorMesh ? floorTop : pick.pickedPoint.y;
+    const previewBottomY = surfaceY + placementYOffset;
 
     lastSnapped = {
       x: pick.pickedPoint.x,
       z: pick.pickedPoint.z,
     };
 
-    containerTarget = findContainerAtPoint(lastSnapped.x, lastSnapped.z);
-
     const placingRole = modelRoleByName.get(placingName) ?? "";
     const isChild = placingRole === "child";
-    const previewSize = size ?? new Vector3(1, 1, 1);
+    containerTarget = isChild
+      ? findContainerAtPoint(lastSnapped.x, lastSnapped.z)
+      : null;
+
     const overlapsChild =
       isChild &&
       doesPreviewOverlapAnyPlacedChild(
@@ -318,8 +397,13 @@ export function createReconstructionPlacementController({
 
     box.position.x = lastSnapped.x;
     box.position.z = lastSnapped.z;
-    box.position.y = floorTop + halfY;
+    box.position.y = previewBottomY + halfY;
     box.rotation.y = rotationSteps * (Math.PI / 2);
+    lastPreviewPlacement = {
+      position: box.position.clone(),
+      bottomY: previewBottomY,
+      rotationSteps,
+    };
     box.setEnabled(true);
   };
 
@@ -340,6 +424,7 @@ export function createReconstructionPlacementController({
     if (e.button !== 0) return;
     refreshPreviewFromPointer();
     if (!lastSnapped || !placingName) return;
+    if (!lastPreviewPlacement) return;
     if (!canPlace) return;
 
     const proto = getPrototype(placingName);
@@ -373,7 +458,7 @@ export function createReconstructionPlacementController({
     const baseRot = placed.rotation?.clone?.() ?? placed.rotation;
     placed.rotation = new Vector3(
       baseRot.x ?? placed.rotation.x ?? 0,
-      rotationSteps * (Math.PI / 2),
+      lastPreviewPlacement.rotationSteps * (Math.PI / 2),
       baseRot.z ?? placed.rotation.z ?? 0,
     );
     const placeScale =
@@ -381,17 +466,14 @@ export function createReconstructionPlacementController({
     placed.scaling.scaleInPlace(placeScale);
 
     placed.computeWorldMatrix(true);
-    const { min, max } = placed.getHierarchyBoundingVectors(true);
-    const center = min.add(max).scale(0.5);
-    const floorTop = getFloorSurfaceWorldY(floorMesh);
-    const renderableMinY = getRenderableMinimumWorldY(placed);
-    const bottomY = renderableMinY ?? min.y;
-    const placementYOffset = modelYOffsetByName.get(placingName) ?? 0;
+    const bounds = getGeometryWorldBounds(placed);
+    const center = bounds.center;
+    const bottomY = bounds.min.y;
 
     placed.position = new Vector3(
-      lastSnapped.x - center.x,
-      floorTop - bottomY + placementYOffset,
-      lastSnapped.z - center.z,
+      lastPreviewPlacement.position.x - center.x,
+      lastPreviewPlacement.bottomY - bottomY,
+      lastPreviewPlacement.position.z - center.z,
     );
     placed.computeWorldMatrix(true);
 
@@ -466,6 +548,7 @@ export function createReconstructionPlacementController({
     placingName = modelName;
     rotationSteps = 0;
     lastSnapped = null;
+    lastPreviewPlacement = null;
     containerTarget = null;
     canPlace = true;
     setPlacementDragBlock(true);
@@ -480,6 +563,7 @@ export function createReconstructionPlacementController({
     placingName = null;
     rotationSteps = 0;
     lastSnapped = null;
+    lastPreviewPlacement = null;
     containerTarget = null;
     canPlace = true;
     setPlacementDragBlock(false);
