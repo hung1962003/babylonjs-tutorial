@@ -3,6 +3,7 @@ import {
   Color3,
   MeshBuilder,
   PointerEventTypes,
+  Ray,
   StandardMaterial,
   Vector3,
   VertexBuffer,
@@ -267,6 +268,15 @@ export function createReconstructionPlacementController({
   ) =>
     minAx < maxBx && maxAx > minBx && minAz < maxBz && maxAz > minBz;
 
+  const isDescendantOf = (candidate, root) => {
+    let cur = candidate;
+    while (cur) {
+      if (cur === root) return true;
+      cur = cur.parent;
+    }
+    return false;
+  };
+
   /**
    * True if the placing preview's XZ footprint (center + size + Y rotation) intersects
    * any placed child hierarchy AABB. Point-only checks miss partial overlaps when the
@@ -299,6 +309,53 @@ export function createReconstructionPlacementController({
       }
     }
     return false;
+  };
+
+  const getParentSupportInfo = (
+    parentRoot,
+    centerX,
+    centerZ,
+    previewSize,
+    previewRotationSteps,
+  ) => {
+    if (!parentRoot) {
+      return { isSupported: false, supportY: null };
+    }
+
+    const parentBounds = getGeometryWorldBounds(parentRoot);
+    const { hx, hz } = getPreviewHalfExtentsXZ(
+      previewSize,
+      previewRotationSteps,
+    );
+    const corners = [
+      [centerX - hx, centerZ - hz],
+      [centerX - hx, centerZ + hz],
+      [centerX + hx, centerZ - hz],
+      [centerX + hx, centerZ + hz],
+    ];
+    const rayOriginY = parentBounds.max.y + previewSize.y + 2;
+    const rayLength = Math.max(previewSize.y + 6, rayOriginY - parentBounds.min.y + 2);
+    const down = new Vector3(0, -1, 0);
+
+    let supportY = Number.NEGATIVE_INFINITY;
+    let hitCount = 0;
+    for (const [x, z] of corners) {
+      const ray = new Ray(new Vector3(x, rayOriginY, z), down, rayLength);
+      const hit = scene.pickWithRay(
+        ray,
+        (candidate) => !!candidate && isDescendantOf(candidate, parentRoot),
+      );
+      if (!hit?.hit || !hit.pickedPoint) {
+        return { isSupported: false, supportY: null };
+      }
+      hitCount += 1;
+      supportY = Math.max(supportY, hit.pickedPoint.y);
+    }
+
+    return {
+      isSupported: hitCount === 4 && Number.isFinite(supportY),
+      supportY: Number.isFinite(supportY) ? supportY : null,
+    };
   };
 
   /** @type {Mesh | null} */
@@ -355,25 +412,37 @@ export function createReconstructionPlacementController({
       return;
     }
 
+    const placingRole = modelRoleByName.get(placingName) ?? "";
+    const isChild = placingRole === "child";
     const size = modelSizeByName.get(placingName);
     const previewSize = size ?? new Vector3(1, 1, 1);
     const placementYOffset = modelYOffsetByName.get(placingName) ?? 0;
     const halfY = previewSize.y / 2;
-    const floorTop = getFloorSurfaceWorldY(floorMesh);
-    const surfaceY =
-      pick.pickedMesh === floorMesh ? floorTop : pick.pickedPoint.y;
-    const previewBottomY = surfaceY + placementYOffset;
 
     lastSnapped = {
       x: pick.pickedPoint.x,
       z: pick.pickedPoint.z,
     };
 
-    const placingRole = modelRoleByName.get(placingName) ?? "";
-    const isChild = placingRole === "child";
     containerTarget = isChild
       ? findContainerAtPoint(lastSnapped.x, lastSnapped.z)
       : null;
+
+    const floorTop = getFloorSurfaceWorldY(floorMesh);
+    const parentSupport = isChild
+      ? getParentSupportInfo(
+          containerTarget,
+          lastSnapped.x,
+          lastSnapped.z,
+          previewSize,
+          rotationSteps,
+        )
+      : null;
+    const surfaceY =
+      pick.pickedMesh === floorMesh
+        ? floorTop
+        : parentSupport?.supportY ?? pick.pickedPoint.y;
+    const previewBottomY = surfaceY + placementYOffset;
 
     const overlapsChild =
       isChild &&
@@ -384,7 +453,9 @@ export function createReconstructionPlacementController({
         rotationSteps,
       );
 
-    if (overlapsChild) {
+    const lacksParentSupport = isChild && !parentSupport?.isSupported;
+
+    if (overlapsChild || lacksParentSupport) {
       canPlace = false;
       setPreviewColor(BLOCKED_COLOR);
     } else if (containerTarget) {
@@ -587,6 +658,13 @@ export function createReconstructionPlacementController({
     startPlacing,
     stopPlacing,
     isPlacing: () => isPlacing,
+    getPlacedRoots: () => [...placedRoots],
+    removePlacedRoot: (root) => {
+      const idx = placedRoots.indexOf(root);
+      if (idx !== -1) {
+        placedRoots.splice(idx, 1);
+      }
+    },
     dispose,
   };
 }
